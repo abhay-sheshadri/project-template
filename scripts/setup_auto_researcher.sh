@@ -18,10 +18,10 @@ git clone https://github.com/redwoodresearch/agent_orchestrator.git agent_orches
 git clone https://github.com/redwoodresearch/agent_viewer.git agent_sdk_viewer
 
 # Install the orchestrator
-uv pip install -e /root/agent_orchestrator/agent_orchestrator
+uv pip install -e /root/agent_orchestrator
 
 # Install the agent SDK viewer
-uv pip install -e /root/agent_sdk_viewer/agent_sdk_viewer
+uv pip install -e /root/agent_sdk_viewer
 
 # Install claude-query-me
-uv pip install -e /root/claude_query_me/claude_query_me
+uv pip install -e /root/claude_query_me
