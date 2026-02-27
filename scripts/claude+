@@ -21,9 +21,9 @@ fi
 chmod o+x /root
 chmod -R o+rX /root/.venv 2>/dev/null
 
-# Give temp user ownership of current directory
+# Give temp user ownership of current directory, excluding sensitive dirs
 WORK_DIR=$(pwd)
-chown -R "$TEMP_USER":"$TEMP_USER" "$WORK_DIR"
+find "$WORK_DIR" -xdev -not -path '*/.ssh*' -not -path '*/.gnupg*' -print0 | xargs -0 chown "$TEMP_USER":"$TEMP_USER" 2>/dev/null
 
 # Run claude as temp user, passing all arguments through
 exec su -c "$CLAUDE_BIN $*" "$TEMP_USER"
