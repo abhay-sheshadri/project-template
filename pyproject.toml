@@ -16,6 +16,7 @@ dependencies = [
     "datasets",
     "peft",
     "trl",
+    "docent-python==0.1.27a0",
 ]
 
 [project.optional-dependencies]
