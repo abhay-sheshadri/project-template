@@ -35,9 +35,14 @@ uv pip install -e ./safety-tooling
 uv pip install -e .
 
 # Install and setup pre-commit hooks
+uv pip install pre-commit
 pre-commit install
 
 # Other utils for development
 run_with_sudo apt update
 run_with_sudo apt install -y tmux gh
 cp .tmux.conf ~/.tmux.conf
+
+# Install claude+ wrapper
+run_with_sudo cp scripts/claude+ /usr/local/bin/claude+
+run_with_sudo chmod +x /usr/local/bin/claude+

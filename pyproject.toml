@@ -12,10 +12,14 @@ dependencies = [
     "torch",
     "jinja2",
     "tqdm",
+    "transformers",
+    "datasets",
+    "peft",
+    "trl",
 ]
 
 [project.optional-dependencies]
 dev = []
 
-[tool.setuptools]
-packages = ["src"]
+[tool.setuptools.packages.find]
+where = ["."]
