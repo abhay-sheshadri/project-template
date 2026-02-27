@@ -63,9 +63,9 @@ def apply_chat_template(
         formatted = tokenizer.apply_chat_template(
             prompt, tokenize=False, enable_thinking=False
         )
-        if tokenizer.bos_token:
-            formatted = formatted.replace(tokenizer.bos_token, "")
-        prompt_str, completion_str = formatted.split("[PLACEHOLDER]")
+        if tokenizer.bos_token and formatted.startswith(tokenizer.bos_token):
+            formatted = formatted[len(tokenizer.bos_token) :]
+        prompt_str, completion_str = formatted.split("[PLACEHOLDER]", 1)
         formatted_examples.append({"prompt": prompt_str, "completion": completion_str})
 
     return (
@@ -87,22 +87,33 @@ def parse_args():
     return parser.parse_args()
 
 
-def main():
+def build_and_run_trainer(
+    args, extra_callbacks=None, tokenizer=None, training_system_prompt=None
+):
     disable_wandb()
-    args = parse_args()
     dataset_ids = [parse_dataset_with_count(s)[0] for s in args.dataset_id]
     print(f"SFT: {args.model_name} on {', '.join(args.dataset_id)}")
+    if training_system_prompt:
+        print("Injecting system prompt into training examples.")
 
-    tokenizer = load_tokenizer(args.model_name, args.tokenizer_name)
+    if tokenizer is None:
+        tokenizer = load_tokenizer(args.model_name, args.tokenizer_name)
     model = load_model(args.model_name, args.is_peft_model)
     peft_config = create_lora_config(rank=args.lora_rank)
 
     def process_dataset(examples):
         all_formatted = []
         for example in examples[args.messages_field]:
+            messages = list(example)
+            if training_system_prompt and (
+                not messages or messages[0]["role"] != "system"
+            ):
+                messages = [
+                    {"role": "system", "content": training_system_prompt}
+                ] + messages
             all_formatted.extend(
                 apply_chat_template(
-                    {"messages": example},
+                    {"messages": messages},
                     tokenizer,
                     final_turn_only=args.final_turn_only,
                 )
@@ -120,6 +131,7 @@ def main():
         desc="Formatting dataset",
     ).shuffle(seed=42)
 
+    callbacks = [TqdmProgressCallback()] + (extra_callbacks or [])
     trainer = SFTTrainer(
         model=model,
         args=SFTConfig(
@@ -136,7 +148,7 @@ def main():
             save_steps=500,
             save_total_limit=1,
             remove_unused_columns=False,
-            report_to=None,
+            report_to="none",
             optim="adamw_torch",
             lr_scheduler_type="cosine",
             max_length=args.max_length,
@@ -145,7 +157,7 @@ def main():
         train_dataset=train_dataset,
         processing_class=tokenizer,
         peft_config=peft_config,
-        callbacks=[TqdmProgressCallback()],
+        callbacks=callbacks,
     )
 
     trainer.train()
@@ -158,6 +170,10 @@ def main():
         push_to_hub(trainer.model, tokenizer, args.hub_model_id, dataset_ids)
 
     print("Done.")
+
+
+def main():
+    build_and_run_trainer(parse_args())
 
 
 if __name__ == "__main__":

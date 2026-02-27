@@ -3,7 +3,6 @@ import re
 from tqdm.auto import tqdm
 
 from src import ChatMessage, MessageRole, Prompt, api
-from src.docent_utils import AgentTranscript
 from src.utils import gather_with_limits, get_project_root, load_prompt_file
 
 from .models import BasicModel
@@ -33,6 +32,13 @@ async def _llm(
             max_tokens=max_tokens,
         )
     )[0].completion
+
+
+def _format_conversation(messages: list[dict]) -> str:
+    """Format a list of {role, content} dicts as a readable conversation string."""
+    return "\n\n".join(
+        f"{msg['role'].capitalize()}: {msg['content']}" for msg in messages
+    )
 
 
 # --- Scenario generation ---
@@ -75,17 +81,21 @@ async def generate_scenarios(
 # --- Classification ---
 
 
-async def classify_transcript(
-    transcript: AgentTranscript, behavior: str, model_id: str
+async def classify_conversation(
+    messages: list[dict], behavior: str, model_id: str
 ) -> dict:
+    """Classify a conversation (list of {role, content} dicts) for a given behavior.
+
+    Returns {score (0-10), behavior_exhibited (bool), reasoning (str)}.
+    """
     response = await _llm(
         model_id,
         "classifier.jinja2",
         behavior=behavior,
-        conversation=transcript.to_str(),
+        conversation=_format_conversation(messages),
     )
     try:
-        score = int(_extract_tag(response, "score"))
+        score = max(0, min(10, int(_extract_tag(response, "score"))))
     except ValueError:
         score = 0
     return {
@@ -106,7 +116,11 @@ async def _run_conversation(
     model: BasicModel,
     num_turns: int,
     auditor_model_id: str,
-) -> AgentTranscript:
+) -> list[dict]:
+    """Run a multi-turn conversation between the target model and an auditor LLM.
+
+    Returns the transcript as a list of {role, content} dicts.
+    """
     initial_message = plan["initial_message"]
     if not initial_message:
         raise ValueError(f"Empty initial_message in plan: {plan}")
@@ -120,15 +134,14 @@ async def _run_conversation(
         conversation_plan=plan["conversation_plan"],
     )
 
-    transcript = AgentTranscript()
+    transcript: list[dict] = [{"role": "user", "content": initial_message}]
     target_messages = [ChatMessage(role=MessageRole.user, content=initial_message)]
-    transcript.add_user_message(initial_message)
 
     for turn in range(num_turns):
         target_response = await model(Prompt(messages=target_messages))
         if not target_response.strip():
             raise ValueError(f"Model returned empty response at turn {turn}")
-        transcript.add_assistant_message(target_response)
+        transcript.append({"role": "assistant", "content": target_response})
         target_messages.append(
             ChatMessage(role=MessageRole.assistant, content=target_response)
         )
@@ -140,14 +153,14 @@ async def _run_conversation(
         auditor_messages = [
             ChatMessage(role=MessageRole.system, content=auditor_system)
         ]
-        for msg in transcript.messages:
-            if msg.role == "user" and msg.content != initial_message:
+        for msg in transcript:
+            if msg["role"] == "user" and msg["content"] != initial_message:
                 auditor_messages.append(
-                    ChatMessage(role=MessageRole.assistant, content=msg.content)
+                    ChatMessage(role=MessageRole.assistant, content=msg["content"])
                 )
-            elif msg.role == "assistant":
+            elif msg["role"] == "assistant":
                 auditor_messages.append(
-                    ChatMessage(role=MessageRole.user, content=msg.content)
+                    ChatMessage(role=MessageRole.user, content=msg["content"])
                 )
 
         auditor_response = (
@@ -160,7 +173,7 @@ async def _run_conversation(
         )[0].completion
         if not auditor_response.strip():
             raise ValueError(f"Auditor returned empty response at turn {turn}")
-        transcript.add_user_message(auditor_response)
+        transcript.append({"role": "user", "content": auditor_response})
         target_messages.append(
             ChatMessage(role=MessageRole.user, content=auditor_response)
         )
@@ -196,7 +209,7 @@ async def run_single_eval(
     transcript = await _run_conversation(
         plan, behavior, idea, scenario_type, model, num_turns, model_id
     )
-    label = await classify_transcript(transcript, behavior, model_id)
+    label = await classify_conversation(transcript, behavior, model_id)
     return {
         "idea": idea,
         "scenario_type": scenario_type,
@@ -255,7 +268,6 @@ async def run_eval(
             tasks,
             n_concurrents=n_concurrents,
             render_tqdm=True,
-            tqdm_desc=f"Evaluating {scenario_type}",
         )
         results[scenario_type] = [e for e in evals if e is not None]
     return results
