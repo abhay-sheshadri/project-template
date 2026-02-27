@@ -1,10 +1,13 @@
 #!/bin/bash
 set -e
 
-source $HOME/.local/bin/env
-source /root/.venv/bin/activate
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-cd /root
+source $HOME/.local/bin/env
+source "${PROJECT_ROOT}/.venv/bin/activate"
+
+cd "$PROJECT_ROOT"
 
 # Remove the extracted zip folders and re-clone from GitHub
 rm -rf claude_query_me ai_config agent_orchestrator agent_sdk_viewer
@@ -15,13 +18,10 @@ git clone https://github.com/redwoodresearch/agent_orchestrator.git agent_orches
 git clone https://github.com/redwoodresearch/agent_viewer.git agent_sdk_viewer
 
 # Install the orchestrator
-cd /root/agent_orchestrator/agent_orchestrator
-uv pip install .
+uv pip install -e "${PROJECT_ROOT}/agent_orchestrator/agent_orchestrator"
 
 # Install the agent SDK viewer
-cd /root/agent_sdk_viewer/agent_sdk_viewer
-uv pip install -e .
+uv pip install -e "${PROJECT_ROOT}/agent_sdk_viewer/agent_sdk_viewer"
 
 # Install claude-query-me
-cd /root/claude_query_me/claude_query_me
-uv pip install .
+uv pip install -e "${PROJECT_ROOT}/claude_query_me/claude_query_me"
