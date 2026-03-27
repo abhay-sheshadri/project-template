@@ -58,6 +58,9 @@ Thumbs.db
 *.log
 logs/
 
+# LLM cache
+.cache_sqlite/
+
 # Environment variables
 .env
 .env.local

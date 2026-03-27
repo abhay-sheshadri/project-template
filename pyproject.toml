@@ -9,6 +9,9 @@ description = "Project description"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic",
+    "openai",
+    "python-dotenv",
     "torch",
     "jinja2",
     "tqdm",

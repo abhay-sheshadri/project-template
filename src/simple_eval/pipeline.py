@@ -2,7 +2,7 @@ import re
 
 from tqdm.auto import tqdm
 
-from src import ChatMessage, MessageRole, Prompt, api
+from src.tooling import complete
 from src.utils import gather_with_limits, get_project_root, load_prompt_file
 
 from .models import BasicModel
@@ -22,16 +22,12 @@ async def _llm(
     model_id: str, template: str, max_tokens: int = 4000, _prefix: str = "", **kwargs
 ) -> str:
     content = _prefix + load_prompt_file(PROMPTS_DIR / template, **kwargs)
-    return (
-        await api(
-            model_id=model_id,
-            prompt=Prompt(
-                messages=[ChatMessage(role=MessageRole.user, content=content)]
-            ),
-            temperature=1.0,
-            max_tokens=max_tokens,
-        )
-    )[0].completion
+    return await complete(
+        content,
+        model=model_id,
+        temperature=1.0,
+        max_tokens=max_tokens,
+    )
 
 
 def _format_conversation(messages: list[dict]) -> str:
@@ -135,48 +131,36 @@ async def _run_conversation(
     )
 
     transcript: list[dict] = [{"role": "user", "content": initial_message}]
-    target_messages = [ChatMessage(role=MessageRole.user, content=initial_message)]
+    target_messages = [{"role": "user", "content": initial_message}]
 
     for turn in range(num_turns):
-        target_response = await model(Prompt(messages=target_messages))
+        target_response = await model(target_messages)
         if not target_response.strip():
             raise ValueError(f"Model returned empty response at turn {turn}")
         transcript.append({"role": "assistant", "content": target_response})
-        target_messages.append(
-            ChatMessage(role=MessageRole.assistant, content=target_response)
-        )
+        target_messages.append({"role": "assistant", "content": target_response})
 
         if turn == num_turns - 1:
             break
 
         # Auditor sees the conversation from the opposite perspective
-        auditor_messages = [
-            ChatMessage(role=MessageRole.system, content=auditor_system)
-        ]
+        auditor_messages = [{"role": "system", "content": auditor_system}]
         for msg in transcript:
             if msg["role"] == "user" and msg["content"] != initial_message:
-                auditor_messages.append(
-                    ChatMessage(role=MessageRole.assistant, content=msg["content"])
-                )
+                auditor_messages.append({"role": "assistant", "content": msg["content"]})
             elif msg["role"] == "assistant":
-                auditor_messages.append(
-                    ChatMessage(role=MessageRole.user, content=msg["content"])
-                )
+                auditor_messages.append({"role": "user", "content": msg["content"]})
 
-        auditor_response = (
-            await api(
-                model_id=auditor_model_id,
-                prompt=Prompt(messages=auditor_messages),
-                temperature=1.0,
-                max_tokens=2000,
-            )
-        )[0].completion
+        auditor_response = await complete(
+            auditor_messages,
+            model=auditor_model_id,
+            temperature=1.0,
+            max_tokens=2000,
+        )
         if not auditor_response.strip():
             raise ValueError(f"Auditor returned empty response at turn {turn}")
         transcript.append({"role": "user", "content": auditor_response})
-        target_messages.append(
-            ChatMessage(role=MessageRole.user, content=auditor_response)
-        )
+        target_messages.append({"role": "user", "content": auditor_response})
 
     return transcript
 

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from src import ChatMessage, MessageRole, Prompt, api
+from src.tooling import complete
 from src.utils import load_prompt_file
 
 
@@ -15,14 +15,13 @@ class BasicModel:
         self.temperature = temperature
         self.max_tokens = max_tokens
 
-    async def __call__(self, prompt: Prompt) -> str:
-        responses = await api(
-            model_id=self.model_id,
-            prompt=prompt,
+    async def __call__(self, messages: list[dict]) -> str:
+        return await complete(
+            messages,
+            model=self.model_id,
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
-        return responses[0].completion
 
 
 class SystemPromptModel(BasicModel):
@@ -50,18 +49,16 @@ class SystemPromptModel(BasicModel):
             else system_prompt.strip()
         )
 
-    def _prepare_prompt(self, prompt: Prompt) -> Prompt:
-        messages = list(prompt.messages)
-        if messages and messages[0].role == MessageRole.system:
-            messages[0] = ChatMessage(
-                role=MessageRole.system,
-                content=self.system_prompt + "\n\n" + messages[0].content,
-            )
+    def _prepare_messages(self, messages: list[dict]) -> list[dict]:
+        messages = list(messages)
+        if messages and messages[0]["role"] == "system":
+            messages[0] = {
+                "role": "system",
+                "content": self.system_prompt + "\n\n" + messages[0]["content"],
+            }
         else:
-            messages.insert(
-                0, ChatMessage(role=MessageRole.system, content=self.system_prompt)
-            )
-        return Prompt(messages=messages)
+            messages.insert(0, {"role": "system", "content": self.system_prompt})
+        return messages
 
-    async def __call__(self, prompt: Prompt) -> str:
-        return await super().__call__(self._prepare_prompt(prompt))
+    async def __call__(self, messages: list[dict]) -> str:
+        return await super().__call__(self._prepare_messages(messages))

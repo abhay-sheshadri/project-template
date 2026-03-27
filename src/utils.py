@@ -7,7 +7,10 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 from jinja2 import Environment, FileSystemLoader
 from tqdm.auto import tqdm
 
@@ -106,6 +109,39 @@ def load_prompt_file(prompt_path: str | Path, **template_vars) -> str:
                         template_vars[var_name] = json.load(f)
 
     return template.render(**template_vars)
+
+
+def extract_tag(text: str, tag: str) -> str:
+    """Extract content between XML tags."""
+    start, end = f"<{tag}>", f"</{tag}>"
+    if start in text and end in text:
+        return text[text.find(start) + len(start) : text.find(end)].strip()
+    return ""
+
+
+async def llm(
+    model_id: str,
+    template: str,
+    max_tokens: int = 4000,
+    _prefix: str = "",
+    api_kwargs: dict | None = None,
+    **kwargs,
+) -> str:
+    """Call LLM with a Jinja2 template and return raw response.
+
+    template can be a filename or an absolute/relative Path.
+    api_kwargs: Extra keyword arguments passed through to the API call (e.g. thinking).
+    """
+    from src.tooling import complete
+
+    content = _prefix + load_prompt_file(template, **kwargs)
+    return await complete(
+        content,
+        model=model_id,
+        temperature=1.0,
+        max_tokens=max_tokens,
+        **(api_kwargs or {}),
+    )
 
 
 async def task_with_semaphore(
