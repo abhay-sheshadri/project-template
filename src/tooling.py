@@ -59,6 +59,13 @@ def _make_openrouter_client():
     )
 
 
+def _make_tinker_client():
+    return openai.AsyncOpenAI(
+        api_key=os.environ.get("TINKER_API_KEY"),
+        base_url="https://tinker.thinkingmachines.dev/services/tinker-prod/oai/api/v1",
+    )
+
+
 PROVIDERS = {
     "anthropic": {
         "models": {
@@ -94,6 +101,13 @@ PROVIDERS = {
         "call": "_call_openai",
         "client_factory": _make_openrouter_client,
     },
+    "tinker": {
+        "models": set(),  # matched by "tinker/" prefix or "tinker://" checkpoint paths
+        "prefix": "tinker/",
+        "concurrency": 10,
+        "call": "_call_openai_text",
+        "client_factory": _make_tinker_client,
+    },
 }
 
 
@@ -105,12 +119,16 @@ def resolve_model(model_id: str) -> tuple[str, str, dict]:
     """Parse model ID into (api_model_id, provider_name, extra_kwargs)."""
     extra = {}
 
+    # Tinker checkpoint paths (tinker://...) are passed as-is to the API
+    if model_id.startswith("tinker://"):
+        return model_id, "tinker", extra
+
     # Strip reasoning effort suffix (e.g. "gpt-5:medium")
     if ":" in model_id:
         model_id, effort = model_id.rsplit(":", 1)
         extra["reasoning_effort"] = effort
 
-    # Check prefix-based providers first (e.g. "openrouter/...")
+    # Check prefix-based providers first (e.g. "openrouter/...", "tinker/...")
     for name, cfg in PROVIDERS.items():
         prefix = cfg.get("prefix")
         if prefix and model_id.startswith(prefix):
@@ -243,6 +261,7 @@ async def _call_anthropic(
     temperature: float,
     max_tokens: int,
     client,
+    raw_prompt: str | None = None,
     **kwargs,
 ) -> str:
     system_parts = [m["content"] for m in messages if m["role"] == "system"]
@@ -268,12 +287,21 @@ async def _call_anthropic(
     return "".join(b.text for b in resp.content if hasattr(b, "text"))
 
 
+def _raise_empty() -> None:
+    import httpx
+
+    raise openai.APIError(
+        "Empty response (no choices)", request=httpx.Request("POST", ""), body=None
+    )
+
+
 async def _call_openai(
     model: str,
     messages: list[dict],
     temperature: float,
     max_tokens: int,
     client,
+    raw_prompt: str | None = None,
     **kwargs,
 ) -> str:
     api_kwargs = {}
@@ -290,11 +318,44 @@ async def _call_openai(
         **api_kwargs,
     )
     if not resp.choices or not resp.choices[0].message.content:
-        import httpx
+        _raise_empty()
+    return resp.choices[0].message.content
 
-        raise openai.APIError(
-            "Empty response (no choices)", request=httpx.Request("POST", ""), body=None
+
+async def _call_openai_text(
+    model: str,
+    messages: list[dict],
+    temperature: float,
+    max_tokens: int,
+    client,
+    raw_prompt: str | None = None,
+    **kwargs,
+) -> str:
+    """OpenAI-compatible text completion (not chat).
+
+    When raw_prompt is provided, uses /completions for base-model sampling.
+    Falls back to /chat/completions for message-list calls.
+    """
+    if raw_prompt is not None:
+        resp = await client.completions.create(
+            model=model,
+            prompt=raw_prompt,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
+        if not resp.choices or not resp.choices[0].text:
+            _raise_empty()
+        return resp.choices[0].text
+
+    # Fall back to chat completions for message lists
+    resp = await client.chat.completions.create(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_completion_tokens=max_tokens,
+    )
+    if not resp.choices or not resp.choices[0].message.content:
+        _raise_empty()
     return resp.choices[0].message.content
 
 
@@ -302,6 +363,7 @@ async def _call_openai(
 _CALL_FUNCTIONS = {
     "_call_anthropic": _call_anthropic,
     "_call_openai": _call_openai,
+    "_call_openai_text": _call_openai_text,
 }
 
 
@@ -350,8 +412,10 @@ async def complete(
 
     prompt can be a string (becomes a user message) or a list of message dicts.
     """
+    raw_prompt = None
     if isinstance(prompt, str):
         messages = [{"role": "user", "content": prompt}]
+        raw_prompt = prompt
     else:
         messages = prompt
 
@@ -373,7 +437,13 @@ async def complete(
     async def _attempt():
         async with sem:
             return await call_fn(
-                api_id, messages, temperature, max_tokens, client, **merged
+                api_id,
+                messages,
+                temperature,
+                max_tokens,
+                client,
+                raw_prompt=raw_prompt,
+                **merged,
             )
 
     result = await _retry_with_backoff(_attempt, retries=retries, label=api_id)
