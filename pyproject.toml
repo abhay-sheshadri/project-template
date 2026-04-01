@@ -20,6 +20,9 @@ dependencies = [
     "peft",
     "trl",
     "docent-python==0.1.27a0",
+    "tinker",
+    "fastapi",
+    "uvicorn",
 ]
 
 [project.optional-dependencies]

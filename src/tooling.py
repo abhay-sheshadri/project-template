@@ -1,14 +1,66 @@
 """Minimal LLM inference with SQLite caching.
 
-Supports Anthropic, OpenAI, and OpenRouter models with a unified async
-interface. Cache is a single SQLite WAL-mode database — fast, portable,
-and requires no external services.
+Supports Anthropic, OpenAI, OpenRouter, and Tinker models with a unified
+async interface. All results are cached in a SQLite WAL-mode database.
+
+Providers & model routing:
+    - Anthropic:    "claude-sonnet-4-6", "claude-opus-4-6", etc.
+    - OpenAI:       "gpt-4.1", "gpt-5", etc.
+    - OpenRouter:   "openrouter/<model-id>" (any model on OpenRouter)
+    - Tinker:       "tinker/<model>" or "tinker://<checkpoint>" (base model sampling)
+    - vLLM:         "vllm/<model>" (local/remote vLLM server, base model sampling)
+
+    Reasoning effort can be appended with a colon, e.g. "gpt-5:medium".
+    Unknown model IDs fall back to Anthropic.
 
 Usage:
     from src.tooling import complete, complete_batch
 
+    # Single-turn — pass a string prompt:
     text = await complete("Say hello", model="claude-sonnet-4-6")
+
+    # Multi-turn — pass a list of message dicts:
+    text = await complete([
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "4"},
+        {"role": "user", "content": "Now multiply that by 3."},
+    ], model="claude-sonnet-4-6")
+
+    # Base model sampling — string prompts use the /completions endpoint
+    # (raw text in, raw text out) for Tinker and vLLM providers:
+    text = await complete("Once upon a time", model="tinker://path/to/checkpoint")
+    text = await complete("Once upon a time", model="vllm/meta-llama/Llama-3-8B")
+
+    # Message lists fall back to /chat/completions for these providers:
+    text = await complete([
+        {"role": "user", "content": "Hello"},
+    ], model="vllm/my-model")
+
+    # Prefills — end with an assistant message to continue from a prefix.
+    # Works with Anthropic and vLLM/Tinker chat endpoints:
+    text = await complete([
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "The answer is"},
+    ], model="claude-sonnet-4-6")
+    # → " 4."
+
+    # For base models, just include the prefix in the string prompt directly:
+    text = await complete("Question: 2+2?\nAnswer:", model="vllm/meta-llama/Llama-3-8B")
+
+    # Extended thinking (Anthropic):
+    text = await complete("Hard problem", model="claude-sonnet-4-6",
+                          thinking={"type": "enabled", "budget_tokens": 5000})
+
+    # Batch completion (Anthropic only) — works with strings or message lists:
     texts = await complete_batch(["Say 1", "Say 2"], model="claude-sonnet-4-6")
+    texts = await complete_batch([
+        [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}, {"role": "user", "content": "Bye"}],
+        [{"role": "system", "content": "Be brief."}, {"role": "user", "content": "What is Python?"}],
+    ], model="claude-sonnet-4-6")
+
+    # Caching is on by default; disable per-call with use_cache=False:
+    text = await complete("Say hello", use_cache=False)
 """
 
 import asyncio
@@ -66,6 +118,13 @@ def _make_tinker_client():
     )
 
 
+def _make_vllm_client():
+    return openai.AsyncOpenAI(
+        api_key=os.environ.get("VLLM_API_KEY", "EMPTY"),
+        base_url=os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1"),
+    )
+
+
 PROVIDERS = {
     "anthropic": {
         "models": {
@@ -104,9 +163,16 @@ PROVIDERS = {
     "tinker": {
         "models": set(),  # matched by "tinker/" prefix or "tinker://" checkpoint paths
         "prefix": "tinker/",
-        "concurrency": 10,
+        "concurrency": 50,
         "call": "_call_openai_text",
         "client_factory": _make_tinker_client,
+    },
+    "vllm": {
+        "models": set(),  # matched by "vllm/" prefix
+        "prefix": "vllm/",
+        "concurrency": 50,
+        "call": "_call_openai_text",
+        "client_factory": _make_vllm_client,
     },
 }
 

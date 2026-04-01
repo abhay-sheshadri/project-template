@@ -65,3 +65,7 @@ logs/
 .env
 .env.local
 .env.*.local
+
+# Data
+lesswrong_data/
+outputs/
